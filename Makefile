@@ -32,6 +32,8 @@ endif
 
 CFLAGS   = -I.              -O3 -DNDEBUG -std=c11   -fPIC
 CXXFLAGS = -I. -I./examples -O3 -DNDEBUG -std=c++11 -fPIC
+#CFLAGS   = -I.              -g -O0 -DDEBUG -std=c11   -fPIC
+#CXXFLAGS = -I. -I./examples -g -O0 -DDEBUG -std=c++11 -fPIC
 LDFLAGS  =
 
 # ref: https://github.com/ggerganov/whisper.cpp/issues/37
