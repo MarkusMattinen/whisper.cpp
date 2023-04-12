@@ -344,6 +344,9 @@ extern "C" {
         bool print_realtime;    // print results from within whisper.cpp (avoid it, use callback instead)
         bool print_timestamps;  // print timestamps for each text segment when printing realtime
 
+        // [EXPERIMENTAL] streaming mode
+        bool stream;            // continously read raw samples from input and run processing in chunks
+
         // [EXPERIMENTAL] token-level timestamps
         bool  token_timestamps; // enable token-level timestamps
         float thold_pt;         // timestamp token probability threshold (~0.01)

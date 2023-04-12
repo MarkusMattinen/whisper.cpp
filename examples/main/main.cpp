@@ -80,6 +80,7 @@ struct whisper_params {
     bool print_colors   = false;
     bool print_progress = false;
     bool no_timestamps  = false;
+    bool stream         = false;
 
     std::string language = "en";
     std::string prompt;
@@ -144,6 +145,7 @@ bool whisper_params_parse(int argc, char ** argv, whisper_params & params) {
         else if (                  arg == "--prompt")         { params.prompt         = argv[++i]; }
         else if (arg == "-m"    || arg == "--model")          { params.model          = argv[++i]; }
         else if (arg == "-f"    || arg == "--file")           { params.fname_inp.emplace_back(argv[++i]); }
+        else if (                  arg == "--stream")         { params.stream         = true; }
         else {
             fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
             whisper_print_usage(argc, argv, params);
@@ -194,6 +196,7 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "             --prompt PROMPT     [%-7s] initial prompt\n",                                 params.prompt.c_str());
     fprintf(stderr, "  -m FNAME,  --model FNAME       [%-7s] model path\n",                                     params.model.c_str());
     fprintf(stderr, "  -f FNAME,  --file FNAME        [%-7s] input WAV file path\n",                            "");
+    fprintf(stderr, "             --stream            [%-7s] continously read raw samples from input\n",        params.stream ? "false" : "true");
     fprintf(stderr, "\n");
 }
 
@@ -701,6 +704,11 @@ int main(int argc, char ** argv) {
         exit(0);
     }
 
+    if (params.stream && params.n_processors != 1) {
+        fprintf(stderr, "%s: WARNING: streaming mode enabled, ignoring n_processors option\n", __func__);
+        params.n_processors = 1;
+    }
+
     // whisper init
 
     struct whisper_context * ctx = whisper_init_from_file(params.model.c_str());
@@ -717,9 +725,11 @@ int main(int argc, char ** argv) {
         std::vector<float> pcmf32;               // mono-channel F32 PCM
         std::vector<std::vector<float>> pcmf32s; // stereo-channel F32 PCM
 
-        if (!::read_wav(fname_inp, pcmf32, pcmf32s, params.diarize)) {
-            fprintf(stderr, "error: failed to read WAV file '%s'\n", fname_inp.c_str());
-            continue;
+        if (!params.stream) {
+            if (!::read_wav(fname_inp, pcmf32, pcmf32s, params.diarize)) {
+                fprintf(stderr, "error: failed to read WAV file '%s'\n", fname_inp.c_str());
+                continue;
+            }
         }
 
         // print system information
@@ -739,12 +749,22 @@ int main(int argc, char ** argv) {
                     fprintf(stderr, "%s: WARNING: model is not multilingual, ignoring language and translation options\n", __func__);
                 }
             }
-            fprintf(stderr, "%s: processing '%s' (%d samples, %.1f sec), %d threads, %d processors, lang = %s, task = %s, timestamps = %d ...\n",
-                    __func__, fname_inp.c_str(), int(pcmf32.size()), float(pcmf32.size())/WHISPER_SAMPLE_RATE,
-                    params.n_threads, params.n_processors,
-                    params.language.c_str(),
-                    params.translate ? "translate" : "transcribe",
-                    params.no_timestamps ? 0 : 1);
+
+            if (params.stream) {
+                fprintf(stderr, "%s: processing '%s' in streaming mode, %d threads, lang = %s, task = %s, timestamps = %d ...\n",
+                        __func__, fname_inp.c_str(),
+                        params.n_threads,
+                        params.language.c_str(),
+                        params.translate ? "translate" : "transcribe",
+                        params.no_timestamps ? 0 : 1);
+            } else {
+                fprintf(stderr, "%s: processing '%s' (%d samples, %.1f sec), %d threads, %d processors, lang = %s, task = %s, timestamps = %d ...\n",
+                        __func__, fname_inp.c_str(), int(pcmf32.size()), float(pcmf32.size())/WHISPER_SAMPLE_RATE,
+                        params.n_threads, params.n_processors,
+                        params.language.c_str(),
+                        params.translate ? "translate" : "transcribe",
+                        params.no_timestamps ? 0 : 1);
+            }
 
             fprintf(stderr, "\n");
         }
@@ -781,6 +801,8 @@ int main(int argc, char ** argv) {
             wparams.temperature_inc  = params.no_fallback ? 0.0f : wparams.temperature_inc;
             wparams.entropy_thold    = params.entropy_thold;
             wparams.logprob_thold    = params.logprob_thold;
+
+            wparams.stream           = params.stream;
 
             whisper_print_user_data user_data = { &params, &pcmf32s };
 

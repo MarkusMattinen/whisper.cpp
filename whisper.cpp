@@ -9,16 +9,21 @@
 #include <algorithm>
 #include <cassert>
 #define _USE_MATH_DEFINES
+#include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdio>
 #include <cstring>
+#include <deque>
 #include <fstream>
+#include <iostream>
 #include <map>
+#include <mutex>
+#include <random>
+#include <regex>
 #include <string>
 #include <thread>
 #include <vector>
-#include <regex>
-#include <random>
 
 #if defined(GGML_BIG_ENDIAN)
 #include <bit>
@@ -3221,6 +3226,8 @@ struct whisper_full_params whisper_full_default_params(enum whisper_sampling_str
         /*.print_realtime   =*/ false,
         /*.print_timestamps =*/ true,
 
+        /*.stream           =*/ false,
+
         /*.token_timestamps =*/ false,
         /*.thold_pt         =*/ 0.01f,
         /*.thold_ptsum      =*/ 0.01f,
@@ -3808,21 +3815,28 @@ int whisper_full_with_state(
 
     result_all.clear();
 
-    // compute log mel spectrogram
-    if (params.speed_up) {
-        if (whisper_pcm_to_mel_phase_vocoder_with_state(ctx, state, samples, n_samples, params.n_threads) != 0) {
-            fprintf(stderr, "%s: failed to compute log mel spectrogram\n", __func__);
-            return -1;
-        }
-    } else {
-        if (whisper_pcm_to_mel_with_state(ctx, state, samples, n_samples, params.n_threads) != 0) {
-            fprintf(stderr, "%s: failed to compute log mel spectrogram\n", __func__);
-            return -2;
+    if (!params.stream) {
+        // compute log mel spectrogram
+        if (params.speed_up) {
+            if (whisper_pcm_to_mel_phase_vocoder_with_state(ctx, state, samples, n_samples, params.n_threads) != 0) {
+                fprintf(stderr, "%s: failed to compute log mel spectrogram\n", __func__);
+                return -1;
+            }
+        } else {
+            if (whisper_pcm_to_mel_with_state(ctx, state, samples, n_samples, params.n_threads) != 0) {
+                fprintf(stderr, "%s: failed to compute log mel spectrogram\n", __func__);
+                return -2;
+            }
         }
     }
 
     // auto-detect language if not specified
     if (params.language == nullptr || strlen(params.language) == 0 || strcmp(params.language, "auto") == 0) {
+        if (params.stream) {
+            fprintf(stderr, "%s: streaming mode enabled, auto-detecting language is not supported\n", __func__);
+            return -3;
+        }
+
         std::vector<float> probs(whisper_lang_max_id() + 1, 0.0f);
 
         const auto lang_id = whisper_lang_auto_detect_with_state(ctx, state, 0, params.n_threads, probs.data());
@@ -3843,8 +3857,12 @@ int whisper_full_with_state(
         state->energy = get_signal_energy(samples, n_samples, 32);
     }
 
-    const int seek_start = params.offset_ms/10;
-    const int seek_end = seek_start + (params.duration_ms == 0 ? whisper_n_len_from_state(state) : params.duration_ms/10);
+    const int seek_start = params.offset_ms / 10;
+    const int seek_end   = params.duration_ms == 0
+        ? params.stream
+            ? std::numeric_limits<int>::max()
+            : seek_start + whisper_n_len_from_state(state)
+        : seek_start + params.duration_ms / 10;
 
     // if length of spectrogram is less than 1s (100 samples), then return
     // basically don't process anything that is less than 1s
@@ -3953,6 +3971,9 @@ int whisper_full_with_state(
     int progress_step = 5;
 
     int seek = seek_start;
+    int seek_chunk_size         = std::min(seek_end - seek, WHISPER_CHUNK_SIZE * 100);
+    int seek_chunk_end          = seek + seek_chunk_size;
+    int seek_chunk_end_previous = seek;
 
     std::vector<whisper_token> prompt;
     prompt.reserve(whisper_n_text_ctx(ctx));
@@ -3976,8 +3997,62 @@ int whisper_full_with_state(
 
     std::vector<beam_candidate> beam_candidates;
 
+    const int buf_step_ms = 1000;
+    const int chunk_min_ms  = 10000; // TODO: this could be added as an option
+    const int chunk_max_ms  = WHISPER_CHUNK_SIZE * 1000;
+
+    const int n_samples_buf_step = (buf_step_ms * 1e-3) * WHISPER_SAMPLE_RATE;
+    const int n_samples_chunk_min  = (chunk_min_ms * 1e-3) * WHISPER_SAMPLE_RATE;
+    const int n_samples_chunk_max  = (chunk_max_ms * 1e-3) * WHISPER_SAMPLE_RATE;
+
+    const int channels         = 1; // TODO: add support for diarize option
+    const int bytes_per_sample = channels * sizeof(float) / sizeof(char);
+
+    std::thread                    readerThread;
+    std::condition_variable        readerCv;
+    std::mutex                     readerMutex;
+    bool                           streamOpen = true; // protected by mutex
+    std::deque<std::vector<float>> readBufs;          // protected by mutex
+
+    if (params.stream) {
+        // start the reader thread
+        readerThread = std::thread{[&] {
+            char               readerBuf[n_samples_buf_step * bytes_per_sample];
+            std::vector<float> readBuf;
+
+            while (true) {
+                // TODO: support reading from file
+                std::cin.read(readerBuf, sizeof(readerBuf));
+                const size_t readBytes = std::cin.gcount();
+
+                std::lock_guard<std::mutex> lock{readerMutex};
+
+                if (readBytes == 0) {
+                    streamOpen = false;
+                    readerCv.notify_one();
+                    break;
+                }
+
+                const size_t readSamples = readBytes / bytes_per_sample;
+                readBuf.clear();
+                readBuf.insert(readBuf.end(), (float*) readerBuf, ((float*) readerBuf) + readSamples);
+
+                // TODO: if processing can't keep up with the input, we should limit how much we read into buffers here
+                readBufs.push_back(std::move(readBuf));
+                readerCv.notify_one();
+            }
+        }};
+    }
+
+    std::vector<float> pcmf32(n_samples_chunk_max, 0.0f);
+    std::vector<float> pcmf32_old;
+    std::vector<float> pcmf32_new(n_samples_chunk_max, 0.0f);
+
+    int mainIter = 0;
+
     // main loop
     while (true) {
+        ++mainIter;
         const int progress_cur = (100*(seek - seek_start))/(seek_end - seek_start);
         while (progress_cur >= progress_prev + progress_step) {
             progress_prev += progress_step;
@@ -3990,10 +4065,131 @@ int whisper_full_with_state(
                 ctx, ctx->state, progress_prev, params.progress_callback_user_data);
         }
 
-        // of only 1 second left, then stop
+        if (params.stream) {
+            int n_samples_old_take  = 0;
+            int n_samples_old_avail = pcmf32_old.size();
+
+            if (seek < seek_chunk_end_previous) {
+                // Whisper often stops processing the chunk before its end in order to not stop in the middle of a word. Determine how many samples of old data we need in the new chunk
+                n_samples_old_take = (seek_chunk_end_previous - seek) * WHISPER_SAMPLE_RATE / 100;
+
+                // Sanity check
+                if (n_samples_old_take > n_samples_old_avail) {
+                    // This probably should never happen
+                    fprintf(stderr,
+                        "%s: WARNING: n_samples_old_take (%d) exceeds n_samples_old_avail (%d)! Possibly incorrect values for seek (%d) or seek_chunk_end_previous (%d)\n",
+                        __func__,
+                        n_samples_old_take,
+                        n_samples_old_avail,
+                        seek,
+                        seek_chunk_end_previous);
+
+                    n_samples_old_take = n_samples_old_avail;
+                }
+            }
+
+            // Determine the maximum amount of new data to receive (aligned to reader buffer size)
+            const int n_samples_new_max = (n_samples_chunk_max - n_samples_old_take) / n_samples_buf_step * n_samples_buf_step;
+
+            pcmf32_new.clear();
+
+            // Loop for receiving data from the reader thread
+            while (true) {
+                // Obtain the reader lock for accessing reader thread state and buffers
+                std::unique_lock<std::mutex> lock{readerMutex};
+
+                // If there is no buffered data and we have enough samples for a chunk, go to processing
+                if (readBufs.empty() && n_samples_old_take + (int) pcmf32_new.size() >= n_samples_chunk_min) {
+                    break;
+                }
+
+                // If there is no buffered data and the input is closed, go to processing
+                if (readBufs.empty() && !streamOpen) {
+                    break;
+                }
+
+                // If there is buffered data available, start going through it
+                if (!readBufs.empty()) {
+                    // Grab a buffer from the reader and add it to the current chunk
+                    {
+                        auto& bufToProcess = readBufs.front();
+
+                        pcmf32_new.insert(pcmf32_new.end(), bufToProcess.data(), bufToProcess.data() + bufToProcess.size());
+                        readBufs.pop_front(); // invalidates &bufToProcess
+                    }
+
+                    // If we now have enough samples to fill Whisper's processing chunk, go to processing
+                    if ((int) pcmf32_new.size() == n_samples_new_max) {
+                        break;
+                    }
+
+                    // Sanity check
+                    if ((int) pcmf32_new.size() > n_samples_new_max) {
+                        // This should never happen if the sample amounts are properly aligned to the reader buffer size
+                        fprintf(stderr,
+                            "%s: WARNING: pcmf32_new size (%zu) exceeds n_samples_new_max (%d)! Possibly incorrect alignment between n_samples_old_take (%d) or n_samples_new_max (%d) to n_samples_buf_step (%d)?\n",
+                            __func__,
+                            pcmf32_new.size(),
+                            n_samples_new_max,
+                            n_samples_old_take,
+                            n_samples_new_max,
+                            n_samples_buf_step);
+                        pcmf32_new.resize(n_samples_new_max);
+                        break;
+                    }
+                }
+
+                // Wait for more data from the reader (lock is released while waiting)
+                readerCv.wait_for(lock, std::chrono::seconds(1), [&] { return !readBufs.empty() || !streamOpen; });
+            }
+
+            const int n_samples_new = pcmf32_new.size();
+            const int n_samples_to_process = n_samples_old_take + n_samples_new;
+
+            // If there is no new data to process, return
+            if (n_samples_new == 0) {
+                readerThread.join();
+                return 0;
+            }
+
+            // Build the processing chunk from the old and new data
+            pcmf32.resize(n_samples_to_process);
+
+            if (n_samples_old_take > 0) {
+                for (int i = 0; i < n_samples_old_take; i++) {
+                    pcmf32[i] = pcmf32_old[n_samples_old_avail - n_samples_old_take + i];
+                }
+            }
+
+            memcpy(pcmf32.data() + n_samples_old_take, pcmf32_new.data(), n_samples_new * sizeof(float));
+            pcmf32_old = pcmf32;
+
+            // Set the data to process
+            samples    = pcmf32.data();
+            n_samples  = n_samples_to_process;
+        }
+
+        // if only 1 second left, then stop
         if (seek + 100 >= seek_end) {
             break;
         }
+
+        // compute log mel spectrogram
+        if (params.speed_up) {
+            if (whisper_pcm_to_mel_phase_vocoder_with_state(ctx, state, samples, n_samples, params.n_threads) != 0) {
+                fprintf(stderr, "%s: failed to compute log mel spectrogram\n", __func__);
+                return -1;
+            }
+        } else {
+            if (whisper_pcm_to_mel_with_state(ctx, state, samples, n_samples, params.n_threads) != 0) {
+                fprintf(stderr, "%s: failed to compute log mel spectrogram\n", __func__);
+                return -2;
+            }
+        }
+
+        // determine seek_chunk_end from the length of the current segment
+        seek_chunk_size = std::min(seek_end - seek, whisper_n_len_from_state(state));
+        seek_chunk_end  = seek + seek_chunk_size;
 
         if (params.encoder_begin_callback) {
             if (params.encoder_begin_callback(ctx, state, params.encoder_begin_callback_user_data) == false) {
@@ -4002,8 +4198,8 @@ int whisper_full_with_state(
             }
         }
 
-        // encode audio features starting at offset seek
-        if (!whisper_encode_internal(*ctx, *state, seek, params.n_threads)) {
+        // encode audio features starting at offset seek (relative to the chunk if streaming mode is enabled)
+        if (!whisper_encode_internal(*ctx, *state, params.stream ? 0 : seek, params.n_threads)) {
             fprintf(stderr, "%s: failed to encode\n", __func__);
             return -6;
         }
@@ -4252,12 +4448,12 @@ int whisper_full_with_state(
 #endif
 
                         // end of segment
-                        if (token.id == whisper_token_eot(ctx) ||               // end of text token
-                           (params.max_tokens > 0 && i >= params.max_tokens) || // max tokens per segment reached
-                           (has_ts && seek + seek_delta + 100 >= seek_end)      // end of audio reached
-                           ) {
+                        if (token.id == whisper_token_eot(ctx) ||                 // end of text token
+                            (params.max_tokens > 0 && i >= params.max_tokens) ||  // max tokens per segment reached
+                            (has_ts && seek + seek_delta + 100 >= seek_chunk_end) // end of audio reached
+                        ) {
                             if (result_len == 0) {
-                                if (seek + seek_delta + 100 >= seek_end) {
+                                if (seek + seek_delta + 100 >= seek_chunk_end) {
                                     result_len = i + 1;
                                 } else {
                                     failed = true;
@@ -4526,12 +4722,17 @@ int whisper_full_with_state(
             }
 
             // update audio window
-            seek += seek_delta;
+            const int seek_previous = seek;
+            seek_chunk_end_previous = seek_chunk_end;
+            seek                    = std::min(seek + seek_delta, seek_chunk_end);
 
             WHISPER_PRINT_DEBUG("seek = %d, seek_delta = %d\n", seek, seek_delta);
         }
     }
 
+    if (readerThread.joinable()) {
+        readerThread.join();
+    }
     return 0;
 }
 
@@ -4550,7 +4751,7 @@ int whisper_full_parallel(
         const float * samples,
         int n_samples,
         int n_processors) {
-    if (n_processors == 1) {
+    if (n_processors == 1 || params.stream) {
         return whisper_full(ctx, params, samples, n_samples);
     }
     int ret = 0;
