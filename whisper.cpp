@@ -4043,6 +4043,11 @@ int whisper_full_with_state(
                 readerCv.notify_one();
             }
         }};
+
+        if (!params.stream_realtime) {
+            // wait for a short while to let the reader fill its buffers
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        }
     }
 
     std::vector<float> pcmf32(n_samples_chunk_max, 0.0f);
