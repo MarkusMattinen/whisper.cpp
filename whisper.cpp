@@ -4673,14 +4673,32 @@ int whisper_full_with_state(
                     auto & decoder = state->decoders[j];
 
                     if (decoder.failed) {
+#ifdef WHISPER_DEBUG
+                        decoder.sequence.result_len = decoder.sequence.tokens.size();
+                        whisper_sequence_score(params, decoder.sequence);
+                        WHISPER_PRINT_DEBUG("%s: decoder %2d: score = %8.5f, result_len = %3d, avg_logprobs = %8.5f, entropy = %8.5f (failed): ",
+                                __func__, j, decoder.sequence.score, decoder.sequence.result_len, decoder.sequence.avg_logprobs, decoder.sequence.entropy);
+
+                        for (auto & token : decoder.sequence.tokens) {
+                            WHISPER_PRINT_DEBUG("%s", ctx->vocab.id_to_token.at(token.id).c_str());
+                        }
+
+                        WHISPER_PRINT_DEBUG("\n");
+#endif
                         continue;
                     }
 
                     decoder.sequence.tokens.resize(decoder.sequence.result_len);
                     whisper_sequence_score(params, decoder.sequence);
 
-                    WHISPER_PRINT_DEBUG("%s: decoder %2d: score = %8.5f, result_len = %3d, avg_logprobs = %8.5f, entropy = %8.5f\n",
+                    WHISPER_PRINT_DEBUG("%s: decoder %2d: score = %8.5f, result_len = %3d, avg_logprobs = %8.5f, entropy = %8.5f: ",
                             __func__, j, decoder.sequence.score, decoder.sequence.result_len, decoder.sequence.avg_logprobs, decoder.sequence.entropy);
+
+                    for (auto & token : decoder.sequence.tokens) {
+                        WHISPER_PRINT_DEBUG("%s", ctx->vocab.id_to_token.at(token.id).c_str());
+                    }
+
+                    WHISPER_PRINT_DEBUG("\n");
 
                     if (decoder.sequence.result_len > 32 && decoder.sequence.entropy < params.entropy_thold) {
                         WHISPER_PRINT_DEBUG("%s: decoder %2d: failed due to entropy %8.5f < %8.5f\n",
