@@ -3488,12 +3488,12 @@ static void whisper_process_logits(
             }
         }
 
+        const bool last_was_timestamp        = tokens_cur.size() > 0 && tokens_cur.back().id >= vocab.token_beg;
+        const bool penultimate_was_timestamp = tokens_cur.size() < 2 || tokens_cur[tokens_cur.size() - 2].id >= vocab.token_beg;
+
         // timestamps have to appear in pairs, except directly before EOT; mask logits accordingly
         // https://github.com/openai/whisper/blob/0b1ba3d46ebf7fe6f953acfd8cad62a4f851b49f/whisper/decoding.py#L414-L424
         {
-            const bool last_was_timestamp        = tokens_cur.size() > 0 && tokens_cur.back().id >= vocab.token_beg;
-            const bool penultimate_was_timestamp = tokens_cur.size() < 2 || tokens_cur[tokens_cur.size() - 2].id >= vocab.token_beg;
-
             //fprintf(stderr, "last_was_timestamp=%d penultimate_was_timestamp=%d\n", last_was_timestamp, penultimate_was_timestamp);
 
             if (last_was_timestamp) {
@@ -3521,9 +3521,11 @@ static void whisper_process_logits(
         }
 
         // condition timestamp tokens to be increasing
-        // ref: https://github.com/openai/whisper/pull/831#issuecomment-1385910556
+        // ref: https://github.com/openai/whisper/blob/c09a7ae299c4c34c5839a76380ae407e7d785914/whisper/decoding.py#L471-L477
         if (decoder.has_ts) {
-            const int tid0 = decoder.seek_delta/2;
+            const int tid0 = last_was_timestamp && !penultimate_was_timestamp
+                ? decoder.seek_delta / 2
+                : decoder.seek_delta / 2 + 1;
 
             for (int i = vocab.token_beg; i < vocab.token_beg + tid0; ++i) {
                 logits[i] = -INFINITY;
