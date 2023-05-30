@@ -3509,14 +3509,22 @@ static void whisper_process_logits(
             }
         }
 
-        // the initial timestamp cannot be larger than max_initial_ts
-        // ref: https://github.com/openai/whisper/blob/0b1ba3d46ebf7fe6f953acfd8cad62a4f851b49f/whisper/decoding.py#L426-L429
-        if (is_initial && params.max_initial_ts > 0.0f) {
-            const float precision = float(WHISPER_CHUNK_SIZE)/ctx.model.hparams.n_audio_ctx;
-            const int   tid0      = std::round(params.max_initial_ts/precision);
-
-            for (int i = vocab.token_beg + tid0 + 1; i < n_logits; ++i) {
+        // suppress generating non-timestamp tokens at the beginning
+        // ref: https://github.com/openai/whisper/blob/c09a7ae299c4c34c5839a76380ae407e7d785914/whisper/decoding.py#L479-L481
+        if (is_initial) {
+            for (int i = 0; i < vocab.token_beg; ++i) {
                 logits[i] = -INFINITY;
+            }
+
+            // the initial timestamp cannot be larger than max_initial_ts
+            // ref: https://github.com/openai/whisper/blob/0b1ba3d46ebf7fe6f953acfd8cad62a4f851b49f/whisper/decoding.py#L426-L429
+            if (params.max_initial_ts > 0.0f) {
+                const float precision = float(WHISPER_CHUNK_SIZE)/ctx.model.hparams.n_audio_ctx;
+                const int   tid0      = std::round(params.max_initial_ts/precision);
+
+                for (int i = vocab.token_beg + tid0 + 1; i < n_logits; ++i) {
+                    logits[i] = -INFINITY;
+                }
             }
         }
 
