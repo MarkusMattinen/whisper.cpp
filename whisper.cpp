@@ -4108,6 +4108,8 @@ int whisper_full_with_state(
     std::vector<float> pcmf32_new(n_samples_chunk_max, 0.0f);
 
     int mainIter = 0;
+    double total_sum_logprobs = 0.0;
+    int total_result_len = 0;
 
     // main loop
     while (true) {
@@ -4755,6 +4757,9 @@ int whisper_full_with_state(
 
             const auto & tokens_cur = best_decoder.sequence.tokens;
 
+            total_sum_logprobs += best_decoder.sequence.sum_logprobs;
+            total_result_len += best_decoder.sequence.result_len;
+
             //WHISPER_PRINT_DEBUG("prompt_init.size() = %d, prompt.size() = %d, result_len = %d, seek_delta = %d\n", prompt_init.size(), prompt.size(), result_len, seek_delta);
 
             // update prompt_past
@@ -4790,6 +4795,9 @@ int whisper_full_with_state(
                         if (!text.empty()) {
                             const auto tt0 = params.speed_up ? 2*t0 : t0;
                             const auto tt1 = params.speed_up ? 2*t1 : t1;
+
+                            WHISPER_PRINT_DEBUG("%s: best decoder: score = %8.5f, result_len = %3d, avg_logprobs = %8.5f, entropy = %8.5f: %s\n",
+                                    __func__, best_decoder.sequence.score, best_decoder.sequence.result_len, best_decoder.sequence.avg_logprobs, best_decoder.sequence.entropy, text.c_str());
 
                             if (params.print_realtime) {
                                 if (params.print_timestamps) {
@@ -4883,6 +4891,9 @@ int whisper_full_with_state(
                 1.0f * (seek_chunk_end - seek) / 100);
         }
     }
+
+    WHISPER_PRINT_DEBUG("%s: final result: result_len = %6d, avg_logprobs = %8.5f\n",
+            __func__, total_result_len, total_sum_logprobs / total_result_len);
 
     if (readerThread.joinable()) {
         readerThread.join();
