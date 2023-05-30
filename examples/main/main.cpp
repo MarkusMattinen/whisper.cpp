@@ -81,6 +81,7 @@ struct whisper_params {
     bool print_progress = false;
     bool no_timestamps  = false;
     bool stream         = false;
+    bool stream_realtime= false;
 
     std::string language = "en";
     std::string prompt;
@@ -146,6 +147,7 @@ bool whisper_params_parse(int argc, char ** argv, whisper_params & params) {
         else if (arg == "-m"    || arg == "--model")          { params.model          = argv[++i]; }
         else if (arg == "-f"    || arg == "--file")           { params.fname_inp.emplace_back(argv[++i]); }
         else if (                  arg == "--stream")         { params.stream         = true; }
+        else if (                  arg == "--stream=realtime"){ params.stream         = true; params.stream_realtime = true; }
         else {
             fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
             whisper_print_usage(argc, argv, params);
@@ -197,6 +199,7 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "  -m FNAME,  --model FNAME       [%-7s] model path\n",                                     params.model.c_str());
     fprintf(stderr, "  -f FNAME,  --file FNAME        [%-7s] input WAV file path\n",                            "");
     fprintf(stderr, "             --stream            [%-7s] continously read raw samples from input\n",        params.stream ? "false" : "true");
+    fprintf(stderr, "             --stream=realtime   [%-7s] drop samples if processing falls behind input\n",  params.stream_realtime ? "false" : "true");
     fprintf(stderr, "\n");
 }
 
@@ -803,6 +806,7 @@ int main(int argc, char ** argv) {
             wparams.logprob_thold    = params.logprob_thold;
 
             wparams.stream           = params.stream;
+            wparams.stream_realtime  = params.stream_realtime;
 
             whisper_print_user_data user_data = { &params, &pcmf32s };
 

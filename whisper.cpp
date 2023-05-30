@@ -3227,6 +3227,7 @@ struct whisper_full_params whisper_full_default_params(enum whisper_sampling_str
         /*.print_timestamps =*/ true,
 
         /*.stream           =*/ false,
+        /*.stream_realtime  =*/ true,
 
         /*.token_timestamps =*/ false,
         /*.thold_pt         =*/ 0.01f,
@@ -4037,7 +4038,7 @@ int whisper_full_with_state(
                 readBuf.clear();
                 readBuf.insert(readBuf.end(), (float*) readerBuf, ((float*) readerBuf) + readSamples);
 
-                // TODO: if processing can't keep up with the input, we should limit how much we read into buffers here
+                // TODO: if processing can't keep up with the input (and realtime streaming mode is not enabled), we should limit how much we read into buffers here
                 readBufs.push_back(std::move(readBuf));
                 readerCv.notify_one();
             }
@@ -4106,6 +4107,33 @@ int whisper_full_with_state(
                 // If there is no buffered data and the input is closed, go to processing
                 if (readBufs.empty() && !streamOpen) {
                     break;
+                }
+
+                // If realtime streaming mode is enabled, check if we need to drop samples to keep up with the input
+                if (params.stream_realtime) {
+                    int n_samples_buffered = 0;
+                    for (auto&& buf : readBufs) {
+                        n_samples_buffered += buf.size();
+                    }
+
+                    int n_samples_dropped  = 0;
+                    while (n_samples_buffered + (int) pcmf32_new.size() > n_samples_new_max) {
+                        auto& bufToDrop = readBufs.front();
+                        const int n_samples_to_drop = bufToDrop.size();
+                        n_samples_buffered -= n_samples_to_drop;
+                        n_samples_dropped += n_samples_to_drop;
+
+                        readBufs.pop_front(); // invalidates &bufToDrop
+                    }
+
+                    if (n_samples_dropped > 0) {
+                        fprintf(stderr,
+                            "%s: WARNING: processing cannot keep up with the input! Dropped %.1f seconds of audio, %.1f seconds left in buffers\n",
+                            __func__,
+                            1.0f * n_samples_dropped / WHISPER_SAMPLE_RATE,
+                            1.0f * n_samples_buffered / WHISPER_SAMPLE_RATE);
+
+                    }
                 }
 
                 // If there is buffered data available, start going through it

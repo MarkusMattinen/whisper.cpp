@@ -346,6 +346,7 @@ extern "C" {
 
         // [EXPERIMENTAL] streaming mode
         bool stream;            // continously read raw samples from input and run processing in chunks
+        bool stream_realtime;   // drop samples as needed if processing cannot keep up with input in streaming mode
 
         // [EXPERIMENTAL] token-level timestamps
         bool  token_timestamps; // enable token-level timestamps
