@@ -4292,6 +4292,13 @@ int whisper_full_with_state(
         seek_chunk_size = std::min(seek_end - seek, whisper_n_len_from_state(state));
         seek_chunk_end  = seek + seek_chunk_size;
 
+        fprintf(stderr,
+            "previous seek_chunk_end %.1f seconds, current seek %.1f seconds, seek_chunk_size %.1f seconds, seek_chunk_end %.1f seconds\n",
+            1.0f * seek_chunk_end_previous / 100,
+            1.0f * seek / 100,
+            1.0f * seek_chunk_size / 100,
+            1.0f * seek_chunk_end / 100);
+
         if (params.encoder_begin_callback) {
             if (params.encoder_begin_callback(ctx, state, params.encoder_begin_callback_user_data) == false) {
                 fprintf(stderr, "%s: encoder_begin_callback returned false - aborting\n", __func__);
@@ -4557,6 +4564,16 @@ int whisper_full_with_state(
                                 if (seek + seek_delta + 100 >= seek_chunk_end) {
                                     result_len = i + 1;
                                 } else {
+                                    fprintf(stderr,
+                                        "%s: WARNING: no results? %d == %d and %d == 0 or %d < %d, seek %d - %d\n",
+                                        __func__,
+                                        i,
+                                        n_max - 1,
+                                        result_len,
+                                        seek_delta,
+                                        100 * WHISPER_CHUNK_SIZE / 2,
+                                        seek,
+                                        seek_chunk_end);
                                     failed = true;
                                     continue;
                                 }
@@ -4582,6 +4599,16 @@ int whisper_full_with_state(
                     // sometimes, the decoding can get stuck in a repetition loop
                     // this is an attempt to mitigate such cases - we flag the decoding as failed and use a fallback strategy
                     if (i == n_max - 1 && (result_len == 0 || seek_delta < 100*WHISPER_CHUNK_SIZE/2)) {
+                        fprintf(stderr,
+                            "%s: WARNING: repetition? %d == %d and %d == 0 or %d < %d, seek %d - %d\n",
+                            __func__,
+                            i,
+                            n_max - 1,
+                            result_len,
+                            seek_delta,
+                            100 * WHISPER_CHUNK_SIZE / 2,
+                            seek,
+                            seek_chunk_end);
                         failed = true;
                         continue;
                     }
@@ -4822,12 +4849,20 @@ int whisper_full_with_state(
                 }
             }
 
+            whisper_print_timings(ctx);
+
             // update audio window
             const int seek_previous = seek;
             seek_chunk_end_previous = seek_chunk_end;
             seek                    = std::min(seek + seek_delta, seek_chunk_end);
 
-            WHISPER_PRINT_DEBUG("seek = %d, seek_delta = %d\n", seek, seek_delta);
+            fprintf(stderr,
+                "previous seek %.1f seconds, seek_delta %.1f seconds, seek_chunk_end %.1f seconds, next seek %.1f seconds, unprocessed %.1f seconds\n",
+                1.0f * seek_previous / 100,
+                1.0f * seek_delta / 100,
+                1.0f * seek_chunk_end / 100,
+                1.0f * seek / 100,
+                1.0f * (seek_chunk_end - seek) / 100);
         }
     }
 
