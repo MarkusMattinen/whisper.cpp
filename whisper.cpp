@@ -3444,6 +3444,44 @@ static void whisper_process_logits(
         logprobs.resize(n_logits);
     }
 
+#ifdef WHISPER_DEBUG
+    int debug_token = 0;
+    float debug_threshold = 0.3f;
+
+    // populate the logprobs array (log_softmax)
+    {
+        const float logit_max = *std::max_element(logits.begin(), logits.end());
+        float logsumexp = 0.0f;
+        for (int i = 0; i < n_logits; ++i) {
+            if (logits[i] > -INFINITY) {
+                logsumexp += expf(logits[i] - logit_max);
+            }
+        }
+        logsumexp = logf(logsumexp) + logit_max;
+
+        for (int i = 0; i < n_logits; ++i) {
+            if (logits[i] > -INFINITY) {
+                logprobs[i] = logits[i] - logsumexp;
+            } else {
+                logprobs[i] = -INFINITY;
+            }
+        }
+    }
+
+    // compute probs
+    {
+        for (int i = 0; i < n_logits; ++i) {
+            if (logits[i] == -INFINITY) {
+                probs[i] = 0.0f;
+            } else {
+                probs[i] = expf(logprobs[i]);
+            }
+        }
+    }
+
+    fprintf(stderr, "suppressed tokens:");
+#endif
+
     // apply logit filters here
     // ref: https://github.com/openai/whisper/blob/0b1ba3d46ebf7fe6f953acfd8cad62a4f851b49f/whisper/decoding.py#L480-L493
     {
@@ -3451,10 +3489,45 @@ static void whisper_process_logits(
         // https://github.com/openai/whisper/blob/0b1ba3d46ebf7fe6f953acfd8cad62a4f851b49f/whisper/decoding.py#L388-L390
         if (params.suppress_blank) {
             if (is_initial) {
+#ifdef WHISPER_DEBUG
+                fprintf(stderr, " (blank)");
+                debug_token = vocab.token_eot;
+                if (probs[debug_token] > debug_threshold) {
+                    fprintf(stderr, " '%s'=%.2f", vocab.id_to_token.at(debug_token).c_str(), probs[debug_token]);
+                }
+                debug_token = vocab.token_to_id.at(" ");
+                if (probs[debug_token] > debug_threshold) {
+                    fprintf(stderr, " '%s'=%.2f", vocab.id_to_token.at(debug_token).c_str(), probs[debug_token]);
+                }
+#endif
                 logits[vocab.token_eot]           = -INFINITY;
                 logits[vocab.token_to_id.at(" ")] = -INFINITY;
             }
         }
+
+#ifdef WHISPER_DEBUG
+        fprintf(stderr, " (special)");
+        debug_token = vocab.token_not;
+        if (probs[debug_token] > debug_threshold) {
+            fprintf(stderr, " '%s'=%.2f", vocab.id_to_token.at(debug_token).c_str(), probs[debug_token]);
+        }
+        debug_token = vocab.token_sot;
+        if (probs[debug_token] > debug_threshold) {
+            fprintf(stderr, " '%s'=%.2f", vocab.id_to_token.at(debug_token).c_str(), probs[debug_token]);
+        }
+        debug_token = vocab.token_solm;
+        if (probs[debug_token] > debug_threshold) {
+            fprintf(stderr, " '%s'=%.2f", vocab.id_to_token.at(debug_token).c_str(), probs[debug_token]);
+        }
+        debug_token = vocab.token_translate;
+        if (probs[debug_token] > debug_threshold) {
+            fprintf(stderr, " '%s'=%.2f", vocab.id_to_token.at(debug_token).c_str(), probs[debug_token]);
+        }
+        debug_token = vocab.token_transcribe;
+        if (probs[debug_token] > debug_threshold) {
+            fprintf(stderr, " '%s'=%.2f", vocab.id_to_token.at(debug_token).c_str(), probs[debug_token]);
+        }
+#endif
 
         // suppress <|notimestamps|> token
         // ref: https://github.com/openai/whisper/blob/0b1ba3d46ebf7fe6f953acfd8cad62a4f851b49f/whisper/decoding.py#L410-L412
@@ -3475,14 +3548,34 @@ static void whisper_process_logits(
         // suppress non-speech tokens
         // ref: https://github.com/openai/whisper/blob/7858aa9c08d98f75575035ecd6481f462d66ca27/whisper/tokenizer.py#L224-L253
         if (params.suppress_non_speech_tokens) {
+#ifdef WHISPER_DEBUG
+        fprintf(stderr, " (non-speech)");
+#endif
             for (const std::string & token : non_speech_tokens) {
                 const std::string suppress_tokens[] = {token, " " + token};
                 for (const std::string & suppress_token : suppress_tokens) {
                     if (vocab.token_to_id.find(suppress_token) != vocab.token_to_id.end()) {
+#ifdef WHISPER_DEBUG
+                        debug_token = vocab.token_to_id.at(suppress_token);
+                        if (probs[debug_token] > debug_threshold) {
+                            fprintf(stderr, " '%s'=%.2f", vocab.id_to_token.at(debug_token).c_str(), probs[debug_token]);
+                        }
+#endif
                         logits[vocab.token_to_id.at(suppress_token)] = -INFINITY;
                     }
                 }
             }
+
+#ifdef WHISPER_DEBUG
+            debug_token = vocab.token_to_id.at(" -");
+            if (probs[debug_token] > debug_threshold) {
+                fprintf(stderr, " '%s'=%.2f", vocab.id_to_token.at(debug_token).c_str(), probs[debug_token]);
+            }
+            debug_token = vocab.token_to_id.at(" '");
+            if (probs[debug_token] > debug_threshold) {
+                fprintf(stderr, " '%s'=%.2f", vocab.id_to_token.at(debug_token).c_str(), probs[debug_token]);
+            }
+#endif
 
             // allow hyphens "-" and single quotes "'" between words, but not at the beginning of a word
             if (vocab.token_to_id.find(" -") != vocab.token_to_id.end()) {
@@ -3503,11 +3596,30 @@ static void whisper_process_logits(
 
             if (last_was_timestamp) {
                 if (penultimate_was_timestamp) {
+#ifdef WHISPER_DEBUG
+                    fprintf(stderr, " (tspair -1 and -2)");
+#endif
+
                     for (int i = vocab.token_beg; i < n_logits; ++i) {
+#ifdef WHISPER_DEBUG
+                        debug_token = i;
+                        if (probs[debug_token] > debug_threshold) {
+                            fprintf(stderr, " '%s'=%.2f", vocab.id_to_token.at(debug_token).c_str(), probs[debug_token]);
+                        }
+#endif
                         logits[i] = -INFINITY;
                     }
                 } else {
+#ifdef WHISPER_DEBUG
+                    fprintf(stderr, " (tspair -1)");
+#endif
                     for (int i = 0; i < vocab.token_eot; ++i) {
+#ifdef WHISPER_DEBUG
+                        debug_token = i;
+                        if (probs[debug_token] > debug_threshold) {
+                            fprintf(stderr, " '%s'=%.2f", vocab.id_to_token.at(debug_token).c_str(), probs[debug_token]);
+                        }
+#endif
                         logits[i] = -INFINITY;
                     }
                 }
@@ -3517,17 +3629,35 @@ static void whisper_process_logits(
         // suppress generating non-timestamp tokens at the beginning
         // ref: https://github.com/openai/whisper/blob/c09a7ae299c4c34c5839a76380ae407e7d785914/whisper/decoding.py#L479-L481
         if (is_initial) {
+#ifdef WHISPER_DEBUG
+            fprintf(stderr, " (beg suppress non-ts)");
+#endif
             for (int i = 0; i < vocab.token_beg; ++i) {
+#ifdef WHISPER_DEBUG
+                debug_token = i;
+                if (probs[debug_token] > debug_threshold) {
+                    fprintf(stderr, " '%s'=%.2f", vocab.id_to_token.at(debug_token).c_str(), probs[debug_token]);
+                }
+#endif
                 logits[i] = -INFINITY;
             }
 
             // the initial timestamp cannot be larger than max_initial_ts
             // ref: https://github.com/openai/whisper/blob/0b1ba3d46ebf7fe6f953acfd8cad62a4f851b49f/whisper/decoding.py#L426-L429
             if (params.max_initial_ts > 0.0f) {
+#ifdef WHISPER_DEBUG
+                fprintf(stderr, " (apply max_initial_ts %.1f)", params.max_initial_ts);
+#endif
                 const float precision = float(WHISPER_CHUNK_SIZE)/ctx.model.hparams.n_audio_ctx;
                 const int   tid0      = std::round(params.max_initial_ts/precision);
 
                 for (int i = vocab.token_beg + tid0 + 1; i < n_logits; ++i) {
+#ifdef WHISPER_DEBUG
+                    debug_token = i;
+                    if (probs[debug_token] > debug_threshold) {
+                        fprintf(stderr, " '%s'=%.2f", vocab.id_to_token.at(debug_token).c_str(), probs[debug_token]);
+                    }
+#endif
                     logits[i] = -INFINITY;
                 }
             }
@@ -3536,11 +3666,20 @@ static void whisper_process_logits(
         // condition timestamp tokens to be increasing
         // ref: https://github.com/openai/whisper/blob/c09a7ae299c4c34c5839a76380ae407e7d785914/whisper/decoding.py#L471-L477
         if (decoder.has_ts) {
+#ifdef WHISPER_DEBUG
+            fprintf(stderr, " (ts %s %d)", (last_was_timestamp && !penultimate_was_timestamp) ? ">=" : ">", decoder.seek_delta / 2);
+#endif
             const int tid0 = last_was_timestamp && !penultimate_was_timestamp
                 ? decoder.seek_delta / 2
                 : decoder.seek_delta / 2 + 1;
 
             for (int i = vocab.token_beg; i < vocab.token_beg + tid0; ++i) {
+#ifdef WHISPER_DEBUG
+                debug_token = i;
+                if (probs[debug_token] > debug_threshold) {
+                    fprintf(stderr, " '%s'=%.2f", vocab.id_to_token.at(debug_token).c_str(), probs[debug_token]);
+                }
+#endif
                 logits[i] = -INFINITY;
             }
         }
@@ -3588,7 +3727,16 @@ static void whisper_process_logits(
             //fprintf(stderr, "timestamp_logprob=%f max_text_token_logprob=%f\n", timestamp_logprob, max_text_token_logprob);
 
             if (timestamp_logprob > max_text_token_logprob) {
+#ifdef WHISPER_DEBUG
+                fprintf(stderr, " (sample ts=%f max_text=%f)", timestamp_logprob, max_text_token_logprob);
+#endif
                 for (int i = 0; i < vocab.token_beg; ++i) {
+#ifdef WHISPER_DEBUG
+                    debug_token = i;
+                    if (probs[debug_token] > debug_threshold) {
+                        fprintf(stderr, " '%s'=%.2f", vocab.id_to_token.at(debug_token).c_str(), probs[debug_token]);
+                    }
+#endif
                     logits[i]   = -INFINITY;
                     logprobs[i] = -INFINITY;
                 }
@@ -3609,11 +3757,13 @@ static void whisper_process_logits(
 
     // apply repeat penalty to consecutively repeating token sequences
     for (int n = 1; n < params.repeat_window; ++n) {
+        const float repeat_penalty = n == 1 ? params.repeat_penalty_1 : params.repeat_penalty_n;
+#ifdef WHISPER_DEBUG
+        fprintf(stderr, "\nrepeat check %d/%d %f ", n, (int) tokens_cur.size(), repeat_penalty);
+#endif
         if (tokens_cur.size() < n * 2) {
             break;
         }
-
-        const float repeat_penalty = n == 1 ? params.repeat_penalty_1 : params.repeat_penalty_n;
 
         if (repeat_penalty <= 0.0f) {
             break;
@@ -3626,6 +3776,10 @@ static void whisper_process_logits(
             last_n_tokens += vocab.id_to_token.at(token_id);
         }
 
+#ifdef WHISPER_DEBUG
+        fprintf(stderr, " last_n '%s' ", last_n_tokens.c_str());
+#endif
+
         std::string previous_n_tokens;
         int         window = n * 2;
         while (tokens_cur.size() >= window) {
@@ -3636,15 +3790,49 @@ static void whisper_process_logits(
                 previous_n_tokens += vocab.id_to_token.at(token_id);
             }
 
+#ifdef WHISPER_DEBUG
+        fprintf(stderr, " win %d, previous_n '%s' ", window, previous_n_tokens.c_str());
+#endif
+
             if (previous_n_tokens != last_n_tokens) {
                 break;
             }
 
             probs[token_to_penalize] *= repeat_penalty;
             window += n;
+
+#ifdef WHISPER_DEBUG
+        fprintf(stderr, "\nPENALIZED %d to %f! ", token_to_penalize, probs[token_to_penalize]);
+#endif
         }
     }
 
+#ifdef WHISPER_DEBUG
+    {
+        std::vector<std::pair<float, int>> probs_id;
+
+        double psum = 0.0;
+        for (int i = 0; i < n_logits; ++i) {
+            probs_id.emplace_back(probs[i], i);
+        }
+
+        using pair_type = decltype(probs_id)::value_type;
+        std::sort(probs_id.begin(), probs_id.end(), [](const pair_type & a, const pair_type & b) {
+            return a.first > b.first;
+        });
+
+        fprintf(stderr, "\ntop probs:");
+        for (int i = 0; i < 100; i++) {
+            const auto tokenid = probs_id[i].second;
+            const auto token   = vocab.id_to_token.at(tokenid);
+            const auto prob    = probs[tokenid];
+            const auto logit   = logits[tokenid];
+            const auto logprob = logprobs[tokenid];
+            fprintf(stderr, " '%s' (%9.5f / %9.5f / %9.5f)", token.c_str(), prob, logit, logprob);
+        }
+        fprintf(stderr, "\n");
+    }
+#endif
 #if 0
     // print first 100 logits - token string : logit
     for (int i = 0; i < 100; i++) {
