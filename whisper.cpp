@@ -3252,6 +3252,10 @@ struct whisper_full_params whisper_full_default_params(enum whisper_sampling_str
         /*.max_initial_ts   =*/  1.0f,
         /*.length_penalty   =*/ -1.0f,
 
+        /*.repeat_penalty_1 =*/ -1.0f,
+        /*.repeat_penalty_n =*/ -1.0f,
+        /*.repeat_window    =*/  10,
+
         /*.temperature_inc  =*/  0.4f,
         /*.entropy_thold    =*/  2.4f,
         /*.logprob_thold    =*/ -1.0f,
@@ -3599,6 +3603,44 @@ static void whisper_process_logits(
             } else {
                 probs[i] = expf(logprobs[i]);
             }
+        }
+    }
+
+    // apply repeat penalty to consecutively repeating token sequences
+    for (int n = 1; n < params.repeat_window; ++n) {
+        if (tokens_cur.size() < n * 2) {
+            break;
+        }
+
+        const float repeat_penalty = n == 1 ? params.repeat_penalty_1 : params.repeat_penalty_n;
+
+        if (repeat_penalty <= 0.0f) {
+            break;
+        }
+
+        const int   token_to_penalize = tokens_cur[tokens_cur.size() - n].id;
+        std::string last_n_tokens     = "";
+        for (int i = 0; i < n; ++i) {
+            const int token_id = tokens_cur[tokens_cur.size() - n + i].id;
+            last_n_tokens += vocab.id_to_token.at(token_id);
+        }
+
+        std::string previous_n_tokens;
+        int         window = n * 2;
+        while (tokens_cur.size() >= window) {
+            previous_n_tokens = "";
+
+            for (int i = 0; i < n; ++i) {
+                const int token_id = tokens_cur[tokens_cur.size() - window + i].id;
+                previous_n_tokens += vocab.id_to_token.at(token_id);
+            }
+
+            if (previous_n_tokens != last_n_tokens) {
+                break;
+            }
+
+            probs[token_to_penalize] *= repeat_penalty;
+            window += n;
         }
     }
 

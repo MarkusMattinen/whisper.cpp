@@ -59,6 +59,7 @@ struct whisper_params {
     int32_t max_len      =  0;
     int32_t best_of      =  2;
     int32_t beam_size    = -1;
+    int32_t repeat_window= 10;
 
     float word_thold      =  0.01f;
     float entropy_thold   =  2.40f;
@@ -67,6 +68,8 @@ struct whisper_params {
     float temperature_inc =  0.20f;
     float max_initial_ts  =  1.00f;
     float length_penalty  = -1.00f;
+    float repeat_penalty_1= -1.00f;
+    float repeat_penalty_n= -1.00f;
 
     bool speed_up       = false;
     bool translate      = false;
@@ -127,11 +130,14 @@ bool whisper_params_parse(int argc, char ** argv, whisper_params & params) {
         else if (arg == "-ml"   || arg == "--max-len")        { params.max_len        = std::stoi(argv[++i]); }
         else if (arg == "-bo"   || arg == "--best-of")        { params.best_of        = std::stoi(argv[++i]); }
         else if (arg == "-bs"   || arg == "--beam-size")      { params.beam_size      = std::stoi(argv[++i]); }
+        else if (                  arg == "--repeat-window")  { params.repeat_window  = std::stoi(argv[++i]); }
         else if (arg == "-wt"   || arg == "--word-thold")     { params.word_thold     = std::stof(argv[++i]); }
         else if (arg == "-et"   || arg == "--entropy-thold")  { params.entropy_thold  = std::stof(argv[++i]); }
         else if (arg == "-lpt"  || arg == "--logprob-thold")  { params.logprob_thold  = std::stof(argv[++i]); }
         else if (arg == "-it"   || arg == "--temperature")    { params.temperature    = std::stof(argv[++i]); }
         else if (arg == "-ti"   || arg == "--temperature-inc"){ params.temperature_inc= std::stof(argv[++i]); }
+        else if (                  arg == "--repeat-penalty-1"){params.repeat_penalty_1=std::stof(argv[++i]); }
+        else if (                  arg == "--repeat-penalty-n"){params.repeat_penalty_n=std::stof(argv[++i]); }
         else if (arg == "-su"   || arg == "--speed-up")       { params.speed_up       = true; }
         else if (arg == "-tr"   || arg == "--translate")      { params.translate      = true; }
         else if (arg == "-di"   || arg == "--diarize")        { params.diarize        = true; }
@@ -184,11 +190,14 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "  -sow,      --split-on-word     [%-7s] split on word rather than on token\n",             params.split_on_word ? "true" : "false");
     fprintf(stderr, "  -bo N,     --best-of N         [%-7d] number of best candidates to keep\n",              params.best_of);
     fprintf(stderr, "  -bs N,     --beam-size N       [%-7d] beam size for beam search\n",                      params.beam_size);
+    fprintf(stderr, "             --repeat-window N   [%-7d] window for repeat penalty (tokens)\n",             params.repeat_window);
     fprintf(stderr, "  -wt N,     --word-thold N      [%-7.2f] word timestamp probability threshold\n",         params.word_thold);
     fprintf(stderr, "  -et N,     --entropy-thold N   [%-7.2f] entropy threshold for decoder fail\n",           params.entropy_thold);
     fprintf(stderr, "  -lpt N,    --logprob-thold N   [%-7.2f] log probability threshold for decoder fail\n",   params.logprob_thold);
     fprintf(stderr, "             --temperature N     [%-7.2f] initial decoding temperature\n",                 params.temperature);
     fprintf(stderr, "             --temperature-inc N [%-7.2f] temperature increment on decode failure\n",      params.temperature_inc);
+    fprintf(stderr, "             --repeat-penalty-1 N[%-7.2f] penalty for repeating a single token\n",         params.repeat_penalty_1);
+    fprintf(stderr, "             --repeat-penalty-n N[%-7.2f] penalty for repeating n tokens\n",               params.repeat_penalty_n);
     fprintf(stderr, "  -su,       --speed-up          [%-7s] speed up audio by x2 (reduced accuracy)\n",        params.speed_up ? "true" : "false");
     fprintf(stderr, "  -tr,       --translate         [%-7s] translate from source language to english\n",      params.translate ? "true" : "false");
     fprintf(stderr, "  -di,       --diarize           [%-7s] stereo audio diarization\n",                       params.diarize ? "true" : "false");
@@ -827,6 +836,10 @@ int main(int argc, char ** argv) {
 
             wparams.stream           = params.stream;
             wparams.stream_realtime  = params.stream_realtime;
+
+            wparams.repeat_window    = params.repeat_window;
+            wparams.repeat_penalty_1 = params.repeat_penalty_1;
+            wparams.repeat_penalty_n = params.repeat_penalty_n;
 
             whisper_print_user_data user_data = { &params, &pcmf32s };
 
