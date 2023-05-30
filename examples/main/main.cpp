@@ -60,9 +60,13 @@ struct whisper_params {
     int32_t best_of      =  2;
     int32_t beam_size    = -1;
 
-    float word_thold    =  0.01f;
-    float entropy_thold =  2.40f;
-    float logprob_thold = -1.00f;
+    float word_thold      =  0.01f;
+    float entropy_thold   =  2.40f;
+    float logprob_thold   = -1.00f;
+    float temperature     =  0.00f;
+    float temperature_inc =  0.20f;
+    float max_initial_ts  =  1.00f;
+    float length_penalty  = -1.00f;
 
     bool speed_up       = false;
     bool translate      = false;
@@ -82,6 +86,8 @@ struct whisper_params {
     bool no_timestamps  = false;
     bool stream         = false;
     bool stream_realtime= false;
+    bool no_blank       = false;
+    bool no_nonspeech   = false;
 
     std::string language = "en";
     std::string prompt;
@@ -124,11 +130,15 @@ bool whisper_params_parse(int argc, char ** argv, whisper_params & params) {
         else if (arg == "-wt"   || arg == "--word-thold")     { params.word_thold     = std::stof(argv[++i]); }
         else if (arg == "-et"   || arg == "--entropy-thold")  { params.entropy_thold  = std::stof(argv[++i]); }
         else if (arg == "-lpt"  || arg == "--logprob-thold")  { params.logprob_thold  = std::stof(argv[++i]); }
+        else if (arg == "-it"   || arg == "--temperature")    { params.temperature    = std::stof(argv[++i]); }
+        else if (arg == "-ti"   || arg == "--temperature-inc"){ params.temperature_inc= std::stof(argv[++i]); }
         else if (arg == "-su"   || arg == "--speed-up")       { params.speed_up       = true; }
         else if (arg == "-tr"   || arg == "--translate")      { params.translate      = true; }
         else if (arg == "-di"   || arg == "--diarize")        { params.diarize        = true; }
         else if (arg == "-sow"  || arg == "--split-on-word")  { params.split_on_word  = true; }
         else if (arg == "-nf"   || arg == "--no-fallback")    { params.no_fallback    = true; }
+        else if (                  arg == "--no-blank")       { params.no_blank       = true; }
+        else if (                  arg == "--no-nonspeech")   { params.no_nonspeech   = true; }
         else if (arg == "-otxt" || arg == "--output-txt")     { params.output_txt     = true; }
         else if (arg == "-ovtt" || arg == "--output-vtt")     { params.output_vtt     = true; }
         else if (arg == "-osrt" || arg == "--output-srt")     { params.output_srt     = true; }
@@ -177,10 +187,14 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "  -wt N,     --word-thold N      [%-7.2f] word timestamp probability threshold\n",         params.word_thold);
     fprintf(stderr, "  -et N,     --entropy-thold N   [%-7.2f] entropy threshold for decoder fail\n",           params.entropy_thold);
     fprintf(stderr, "  -lpt N,    --logprob-thold N   [%-7.2f] log probability threshold for decoder fail\n",   params.logprob_thold);
+    fprintf(stderr, "             --temperature N     [%-7.2f] initial decoding temperature\n",                 params.temperature);
+    fprintf(stderr, "             --temperature-inc N [%-7.2f] temperature increment on decode failure\n",      params.temperature_inc);
     fprintf(stderr, "  -su,       --speed-up          [%-7s] speed up audio by x2 (reduced accuracy)\n",        params.speed_up ? "true" : "false");
     fprintf(stderr, "  -tr,       --translate         [%-7s] translate from source language to english\n",      params.translate ? "true" : "false");
     fprintf(stderr, "  -di,       --diarize           [%-7s] stereo audio diarization\n",                       params.diarize ? "true" : "false");
     fprintf(stderr, "  -nf,       --no-fallback       [%-7s] do not use temperature fallback while decoding\n", params.no_fallback ? "true" : "false");
+    fprintf(stderr, "             --no-blank          [%-7s] suppress blank tokens\n",                          params.no_blank ? "true" : "false");
+    fprintf(stderr, "             --no-nonspeech      [%-7s] suppress non-speech tokens\n",                     params.no_nonspeech ? "true" : "false");
     fprintf(stderr, "  -otxt,     --output-txt        [%-7s] output result in a text file\n",                   params.output_txt ? "true" : "false");
     fprintf(stderr, "  -ovtt,     --output-vtt        [%-7s] output result in a vtt file\n",                    params.output_vtt ? "true" : "false");
     fprintf(stderr, "  -osrt,     --output-srt        [%-7s] output result in a srt file\n",                    params.output_srt ? "true" : "false");
@@ -801,9 +815,15 @@ int main(int argc, char ** argv) {
             wparams.greedy.best_of        = params.best_of;
             wparams.beam_search.beam_size = params.beam_size;
 
-            wparams.temperature_inc  = params.no_fallback ? 0.0f : wparams.temperature_inc;
+            wparams.temperature      = params.temperature;
+            wparams.temperature_inc  = params.no_fallback ? 0.0f : params.temperature_inc;
             wparams.entropy_thold    = params.entropy_thold;
             wparams.logprob_thold    = params.logprob_thold;
+            wparams.max_initial_ts   = params.max_initial_ts;
+            wparams.length_penalty   = params.length_penalty;
+
+            wparams.suppress_blank             = params.no_blank;
+            wparams.suppress_non_speech_tokens = params.no_nonspeech;
 
             wparams.stream           = params.stream;
             wparams.stream_realtime  = params.stream_realtime;
