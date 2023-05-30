@@ -4386,11 +4386,11 @@ int whisper_full_with_state(
                 prompt.insert(prompt.end(), prompt_init.begin(), prompt_init.end());
 
                 // print the prompt
-                WHISPER_PRINT_DEBUG("\n\n");
+                WHISPER_PRINT_DEBUG("%s: prompt = ", __func__);
                 for (int i = 0; i < (int) prompt.size(); i++) {
-                    WHISPER_PRINT_DEBUG("%s: prompt[%d] = %s\n", __func__, i, ctx->vocab.id_to_token.at(prompt[i]).c_str());
+                    WHISPER_PRINT_DEBUG("%s", ctx->vocab.id_to_token.at(prompt[i]).c_str());
                 }
-                WHISPER_PRINT_DEBUG("\n\n");
+                WHISPER_PRINT_DEBUG("\n");
 
                 if (!whisper_decode_internal(*ctx, *state, state->decoders[0], prompt.data(), prompt.size(), 0, params.n_threads)) {
                     fprintf(stderr, "%s: failed to decode\n", __func__);
