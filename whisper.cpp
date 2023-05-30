@@ -2418,8 +2418,9 @@ static bool log_mel_spectrogram(
 
     mel.data.resize(mel.n_mel*mel.n_len);
 
-    //printf("%s: n_samples = %d, n_len = %d\n", __func__, n_samples, mel.n_len);
-    //printf("%s: recording length: %f s\n", __func__, (float) n_samples/sample_rate);
+    fprintf(stderr, "%s: n_samples = %d, n_len = %d, n_len_org = %d, pad = %d\n",
+            __func__, n_samples, mel.n_len, mel.n_len_org, (100 * WHISPER_CHUNK_SIZE) / 2);
+    fprintf(stderr, "%s: recording length: %f s\n", __func__, (float) n_samples / WHISPER_SAMPLE_RATE);
 
     {
         std::vector<std::thread> workers(n_threads - 1);
@@ -2459,7 +2460,8 @@ static bool log_mel_spectrogram(
 
     wstate.t_mel_us += ggml_time_us() - t_start_us;
 
-    //printf("mel.n_len() = %d, divided by 1500: %f, n_samples / fft_step: %d\n", mel.n_len, mel.n_len / 1500.0, n_samples / fft_step);
+    fprintf(stderr, "mel.n_len() = %d, divided by 1500: %f, n_samples / fft_step: %d\n",
+            mel.n_len, mel.n_len / 1500.0, n_samples / fft_step);
 
     return true;
 }
