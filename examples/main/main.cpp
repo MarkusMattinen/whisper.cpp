@@ -91,6 +91,7 @@ struct whisper_params {
     bool stream_realtime= false;
     bool no_blank       = false;
     bool no_nonspeech   = false;
+    bool write_samples  = false;
 
     std::string language = "en";
     std::string prompt;
@@ -164,6 +165,7 @@ bool whisper_params_parse(int argc, char ** argv, whisper_params & params) {
         else if (arg == "-f"    || arg == "--file")           { params.fname_inp.emplace_back(argv[++i]); }
         else if (                  arg == "--stream")         { params.stream         = true; }
         else if (                  arg == "--stream=realtime"){ params.stream         = true; params.stream_realtime = true; }
+        else if (                  arg == "--write-samples")  { params.write_samples  = true; }
         else {
             fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
             whisper_print_usage(argc, argv, params);
@@ -223,6 +225,7 @@ void whisper_print_usage(int /*argc*/, char ** argv, const whisper_params & para
     fprintf(stderr, "  -f FNAME,  --file FNAME        [%-7s] input WAV file path\n",                            "");
     fprintf(stderr, "             --stream            [%-7s] continously read raw samples from input\n",        params.stream ? "false" : "true");
     fprintf(stderr, "             --stream=realtime   [%-7s] drop samples if processing falls behind input\n",  params.stream_realtime ? "false" : "true");
+    fprintf(stderr, "             --write-samples     [%-7s] write pcm data in per-chunk files for debugging\n",params.write_samples ? "false" : "true");
     fprintf(stderr, "\n");
 }
 
@@ -836,6 +839,7 @@ int main(int argc, char ** argv) {
 
             wparams.stream           = params.stream;
             wparams.stream_realtime  = params.stream_realtime;
+            wparams.write_samples    = params.write_samples;
 
             wparams.repeat_window    = params.repeat_window;
             wparams.repeat_penalty_1 = params.repeat_penalty_1;

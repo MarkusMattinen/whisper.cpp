@@ -3228,6 +3228,7 @@ struct whisper_full_params whisper_full_default_params(enum whisper_sampling_str
 
         /*.stream           =*/ false,
         /*.stream_realtime  =*/ true,
+        /*.write_samples    =*/ true,
 
         /*.token_timestamps =*/ false,
         /*.thold_pt         =*/ 0.01f,
@@ -4248,6 +4249,21 @@ int whisper_full_with_state(
 
             memcpy(pcmf32.data() + n_samples_old_take, pcmf32_new.data(), n_samples_new * sizeof(float));
             pcmf32_old = pcmf32;
+
+            if (params.write_samples) {
+                // Write sample data to file
+                char fnameBuff[100];
+                snprintf(fnameBuff, sizeof(fnameBuff), "part%d.wav", mainIter);
+                std::string fname = fnameBuff;
+
+                std::ofstream file(fname, std::ios::out | std::ios::binary);
+                if (file.is_open()) {
+                    file.write((char*) pcmf32.data(), n_samples_to_process * bytes_per_sample);
+                    file.close();
+                } else {
+                    fprintf(stderr, "unable to open file %s\n", fnameBuff);
+                }
+            }
 
             // Set the data to process
             samples    = pcmf32.data();
